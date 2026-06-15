@@ -239,10 +239,10 @@ Pistes futures envisagées :
 
 ## 📄 Licence
 
-> _À définir._ Ajoutez un fichier [LICENSE](https://github.com/Othman-Benbrahim/IRIS-Station/blob/main/LICENSE) à la racine. Une licence permissive comme **MIT** est un choix courant pour ce type de projet :
+ À définir. Ajoutez un fichier [LICENSE](https://github.com/Othman-Benbrahim/IRIS-Station/blob/main/LICENSE) à la racine. Une licence permissive comme **MIT** est un choix courant pour ce type de projet :
 
 ```
-MIT License — Copyright (c) <2026> <Ben Brahim Othman>
+MIT License — Copyright (c) 2026- Ben Brahim Othman-
 ```
 
 ---
