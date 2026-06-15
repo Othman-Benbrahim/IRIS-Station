@@ -1,0 +1,95 @@
+# =============================================================================
+#  .gitignore — IRIS-Station
+# =============================================================================
+
+# --- Données IRIS-Station (base SQLite locale = données utilisateur) ---------
+# La base ne doit jamais être versionnée : elle contient vos projets, preuves,
+# prédictions, etc. Elle vit normalement dans le dossier de données du système,
+# mais on l'ignore aussi à la racine par sécurité.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# patterns.json est généré dans le dossier de données utilisateur.
+# Décommentez la ligne suivante s'il se retrouve à la racine et que vous ne
+# souhaitez pas le versionner :
+# patterns.json
+
+# Exports produits par l'application, s'ils sont écrits dans le dépôt.
+*_rapport.md
+*_matrice_ACH.csv
+*_predictions.csv
+*_graphe.graphml
+
+# --- Secrets ----------------------------------------------------------------
+# La clé API est stockée dans les réglages de l'app (QSettings), pas ici ;
+# on ignore tout de même les fichiers d'environnement par précaution.
+.env
+.env.*
+*.key
+secrets.*
+
+# --- Environnements virtuels Python -----------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# --- Octets compilés / cache Python -----------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Packaging / distribution -----------------------------------------------
+build/
+dist/
+downloads/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+*.manifest
+# PyInstaller : par défaut, votre fichier .spec EST versionné (c'est une config).
+# Décommentez si vous préférez l'ignorer :
+# *.spec
+
+# --- Tests, couverture, linters, type-checkers ------------------------------
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.ruff_cache/
+
+# --- Éditeurs / IDE ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# --- Fichiers système d'exploitation ----------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# --- Divers -----------------------------------------------------------------
+*.log
+*.bak
+*.tmp
