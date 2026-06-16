@@ -88,14 +88,12 @@ IRIS-Station repose sur cinq principes non négociables :
 
 ## 📸 Captures d'écran
 
-> _À compléter._ Placez vos images dans un dossier `docs/` et référencez-les ici, par exemple :
 
-```markdown
-![Vue d'ensemble](docs/dashboard.png)
-![Matrice ACH](docs/matrice-ach.png)
-![Diagramme de fiabilité](docs/calibration.png)
-![Graphe de connaissances](docs/graphe.png)
-```
+[Vue d'ensemble](docs/dashboard.png)
+[Matrice ACH](docs/matrice-ach.png)
+[Diagramme de fiabilité](docs/calibration.png)
+[Graphe de connaissances](docs/graphe.png)
+
 
 ---
 
