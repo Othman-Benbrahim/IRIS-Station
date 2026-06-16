@@ -152,7 +152,15 @@ python main.py
 
 > Au premier lancement, l'application crée sa base SQLite dans le dossier de données utilisateur de votre système. Le fichier `patterns.json` (règles de relations du graphe) est également généré et reste librement éditable.
 
----
+### Dépannage
+
+**Erreur `No module named 'spacy.parts_of_speech'`** (lors des résumés ou du graphe) : c'est un **désaccord de versions** entre spaCy et le modèle `fr_core_news_sm`. Les résumés basculent automatiquement sur un moteur de repli (sans spaCy) et restent fonctionnels, mais pour rétablir le NER et la pleine qualité, réalignez les versions :
+
+```bash
+pip install --upgrade "spacy>=3.7,<3.9"
+pip install --upgrade --force-reinstall fr_core_news_sm
+```
+
 
 ## 🚀 Prise en main rapide
 
