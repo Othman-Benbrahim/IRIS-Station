@@ -89,10 +89,10 @@ IRIS-Station repose sur cinq principes non négociables :
 ## 📸 Captures d'écran
 
 
-[Vue d'ensemble](docs/dashboard.png)
-[Matrice ACH](docs/matrice-ach.png)
-[Diagramme de fiabilité](docs/calibration.png)
-[Graphe de connaissances](docs/graphe.png)
+- [Vue d'ensemble](docs/dashboard.png)
+- [Matrice ACH](docs/matrice-ach.png)
+- [Diagramme de fiabilité](docs/calibration.png)
+- [Graphe de connaissances](docs/graphe.png)
 
 
 ---
