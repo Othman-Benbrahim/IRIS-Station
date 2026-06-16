@@ -242,8 +242,11 @@ Pistes futures envisagées :
 ```
 MIT License — Copyright (c) 2026- Ben Brahim Othman-
 ```
+## ⬇️ Téléchargement
 
----
+Un binaire Windows de démonstration est disponible dans les [Releases](https://github.com/Othman-Benbrahim/IRIS-Station/releases/tag/v0.1.0-demo).
+
+> ⚠️ **Binaire non signé — Windows peut afficher un avertissement** (SmartScreen / « Windows a protégé votre ordinateur »). Cliquez sur **« Informations complémentaires » › « Exécuter quand même »**. Pour une installation sans avertissement, **buildez depuis les sources** (voir Installation).
 
 <p align="center">
   <sub>IRIS-Station — penser avec méthode, mesurer avec honnêteté.</sub>
