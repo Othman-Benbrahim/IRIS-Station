@@ -161,6 +161,7 @@ pip install --upgrade "spacy>=3.7,<3.9"
 pip install --upgrade --force-reinstall fr_core_news_sm
 ```
 
+---
 
 ## 🚀 Prise en main rapide
 
