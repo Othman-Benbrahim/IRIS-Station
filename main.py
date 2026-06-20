@@ -133,10 +133,29 @@ try:
         QNetworkRequest,
     )
 except ImportError:  # pragma: no cover - dépendance manquante
-    sys.stderr.write(
-        "PySide6 est requis. Installez-le avec :\n    pip install PySide6\n"
+    _msg = (
+        "PySide6 est requis pour lancer IRIS-Station.\n\n"
+        "Installez-le avec :\n    pip install PySide6\n\n"
+        "Si vous avez créé un exécutable, rebuildez APRÈS avoir installé "
+        "PySide6 dans l'environnement de build."
     )
-    raise
+    # sys.stderr peut valoir None dans un exécutable « windowed » (sans console) :
+    # on écrit prudemment et, sous Windows, on affiche une boîte de dialogue native.
+    if sys.stderr is not None:
+        try:
+            sys.stderr.write(_msg + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(
+                0, _msg, "IRIS-Station — dépendance manquante", 0x10
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    sys.exit(1)
 
 # --- matplotlib (diagramme de fiabilité) — import tolérant -------------------
 MATPLOTLIB_AVAILABLE = True
@@ -512,6 +531,65 @@ def map_ner_label(label: str) -> str | None:
     return NER_LABEL_MAP.get(label)
 
 
+# Indices lexicaux pour reclasser une entité en ORG. Corrige à la fois le
+# sur-étiquetage PERSON de fr_core_news_sm sur les organisations françaises et
+# les sorties LLM qui étiquettent mal médias/institutions.
+_ORG_TOKENS = {
+    "parti", "etat", "fed", "fbi", "cia", "nsa", "onu", "otan", "ue", "banque",
+    "cour", "assemblee", "senat", "ministere", "agence", "universite", "ecole",
+    "conseil", "commission", "comite", "federation", "syndicat", "institut",
+    "fondation", "association", "ong", "societe", "groupe", "entreprise",
+    "compagnie", "journal", "gazette", "presse", "media", "medias", "tribunal",
+    "parquet", "police", "gendarmerie", "armee", "gouvernement", "republique",
+    "times", "post", "news", "project", "inc", "corp", "ltd", "sa", "sas",
+    "gmbh", "llc", "group", "press", "tv", "radio", "agency", "bank",
+    "department", "departement", "bureau", "office", "council", "committee",
+    "party", "university", "institute", "foundation", "union",
+}
+# Médias / agences de presse connus (comparaison normalisée).
+_MEDIA_ORGS = {
+    "afp", "cnn", "bbc", "reuters", "ap", "npr", "pbs", "msnbc", "fox news",
+    "le monde", "los angeles times", "new york times", "the new york times",
+    "washington post", "cnews", "bfmtv", "france info", "liberation",
+    "le figaro", "mediapart", "the guardian", "politico", "axios",
+}
+_KNOWN_ORGS = _MEDIA_ORGS | {
+    "fed", "fbi", "cia", "nsa", "onu", "otan", "ue", "the representation project",
+    "parti democrate", "parti republicain", "parti socialiste", "fmi", "ocde",
+}
+
+
+def refine_entity_type(name: str, base_type: str | None) -> str:
+    """Affine le type d'une entité : reclasse en ORG les institutions et médias
+    mal étiquetés PERSON/MISC. Laisse intacts LOC, DATE et ORG."""
+    base = base_type or "MISC"
+    if base in ("LOC", "DATE", "ORG"):
+        return base
+    raw = (name or "").strip()
+    norm = normalize_entity_name(raw)
+    if not norm:
+        return base
+    if norm in _KNOWN_ORGS:
+        return "ORG"
+    tokens = set(re.split(r"[\s\-’']+", norm))
+    if tokens & _ORG_TOKENS:
+        return "ORG"
+    # Sigle en capitales (CNN, AFP, FBI, ONU) — rarement un nom de personne.
+    if re.fullmatch(r"[A-ZÀ-Ý][A-ZÀ-Ý.&]{1,6}", raw):
+        return "ORG"
+    return base
+
+
+def refine_relation_type(
+    source_name: str, target_name: str, base_type: str
+) -> str:
+    """Affine le type d'une relation : un média qui « affirme » à propos d'une
+    entité la *rapporte* (SOURCE) plutôt qu'il ne l'asserte (AFFIRMS)."""
+    if base_type == "AFFIRMS" and normalize_entity_name(source_name) in _MEDIA_ORGS:
+        return "SOURCE"
+    return base_type
+
+
 def patterns_path() -> Path:
     """Chemin du fichier de patterns éditable par l'utilisateur."""
     return app_data_dir() / "patterns.json"
@@ -607,9 +685,9 @@ def analyze_text(
             ents.append((name, etype))
 
     for ent in doc.ents:
-        etype = map_ner_label(ent.label_)
-        if etype:
-            add_entity(ent.text, etype)
+        mapped = map_ner_label(ent.label_)
+        if mapped:
+            add_entity(ent.text, refine_entity_type(ent.text, mapped))
 
     date_spans = filter_spans([doc[s:e] for _, s, e in date_matcher(doc)])
     for span in date_spans:
@@ -619,7 +697,8 @@ def analyze_text(
     entity_meta: list[tuple[str, str, dict]] = []
 
     def ent_type(span) -> str | None:  # noqa: ANN001
-        return map_ner_label(span.label_)
+        mapped = map_ner_label(span.label_)
+        return refine_entity_type(span.text, mapped) if mapped else None
 
     for match_id, start, end in matcher(doc):
         rel_type = nlp.vocab.strings[match_id]
@@ -851,6 +930,61 @@ def summarize_doc(doc, k_max: int = 5) -> tuple[list[str], list[int]]:  # noqa: 
     return sentences, selected
 
 
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+(?=[A-ZÀ-ÝÉÈÊ«\"0-9])")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Découpe un texte en phrases (pur Python, sans spaCy)."""
+    normalized = re.sub(r"\s+", " ", (text or "").strip())
+    if not normalized:
+        return []
+    parts = _SENT_SPLIT_RE.split(normalized)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def summarize_text_plain(text: str, k_max: int = 5) -> tuple[list[str], list[int]]:
+    """Résumé extractif TextRank sans spaCy : phrases vectorisées en TF-IDF.
+
+    Repli utilisé quand spaCy est absent ou incompatible. Renvoie
+    (phrases, indices_sélectionnés) comme summarize_doc.
+    """
+    sentences = split_sentences(text)
+    n = len(sentences)
+    if n == 0:
+        return [], []
+    k = min(k_max, max(1, n // 3))
+    if n <= k:
+        return sentences, list(range(n))
+
+    tokens = [
+        [w for w in re.findall(r"[\wàâäéèêëïîôöùûüç]+", s.lower()) if len(w) > 2]
+        for s in sentences
+    ]
+    df: dict[str, int] = defaultdict(int)
+    for toks in tokens:
+        for w in set(toks):
+            df[w] += 1
+    vocab = {w: i for i, w in enumerate(df)}
+    vectors: list[list[float] | None] = []
+    for toks in tokens:
+        total = len(toks) or 1
+        vec = [0.0] * len(vocab)
+        counts: dict[str, int] = defaultdict(int)
+        for w in toks:
+            counts[w] += 1
+        for w, c in counts.items():
+            vec[vocab[w]] = (c / total) * (math.log((1 + n) / (1 + df[w])) + 1.0)
+        vectors.append(vec if any(vec) else None)
+
+    selected = textrank_select(vectors, k)
+    if not selected:
+        selected = textrank_select_lexical([set(t) for t in tokens], k)
+    if not selected:  # ultime repli : les phrases les plus « riches »
+        selected = sorted(range(n), key=lambda i: len(tokens[i]), reverse=True)[:k]
+        selected.sort()
+    return sentences, selected
+
+
 # =============================================================================
 #  Helpers Phase 8 — normalisation, JSON, tokens, modèle spaCy partagé
 # =============================================================================
@@ -941,8 +1075,20 @@ LLM_SYSTEM_PROMPT = (
     "vide [].\n"
     "- Les scores ACH sont UNIQUEMENT : \"CC\", \"C\", \"N\", \"I\", \"II\".\n"
     "- Les types d'entités sont UNIQUEMENT : PERSON, ORG, LOC, MISC, DATE.\n"
+    "  · ORG = médias, agences de presse, institutions, partis, administrations, "
+    "entreprises, ONG (ex. CNN, AFP, Le Monde, FBI, Parti démocrate, ONU).\n"
+    "  · LOC = lieux, villes, pays, régions (ex. Californie, État de New York).\n"
+    "  · PERSON = uniquement des individus nommés. N'étiquette JAMAIS un média "
+    "ou une institution en PERSON.\n"
     "- Les types de relations sont UNIQUEMENT : AFFIRMS, CONTRADICTS, SOURCE, "
     "AFFILIATED_WITH, CREATED, CO_OCCURS, DOCUMENTED_BY.\n"
+    "  · AFFIRMS/CONTRADICTS : une personne ou une institution asserte/conteste "
+    "explicitement quelque chose.\n"
+    "  · SOURCE ou DOCUMENTED_BY : un média/une source rapporte une information "
+    "(ex. « CNN → personne » est SOURCE, pas AFFIRMS).\n"
+    "  · AFFILIATED_WITH : appartenance ou direction (ex. « Comey → FBI »).\n"
+    "  · CO_OCCURS : simple co-occurrence sans lien sémantique précis.\n"
+    "  Ne mets pas tout en AFFIRMS par défaut : choisis le type le plus juste.\n"
     "- Les horizons sont UNIQUEMENT : \"court_terme\", \"moyen_terme\", "
     "\"long_terme\", null.\n"
     "- credibility est un entier de 1 à 5."
@@ -1595,6 +1741,33 @@ class Database:
             (project_id,),
         ).fetchone()
 
+    def delete_project(self, project_id: int) -> None:
+        """Supprime un projet et TOUTES ses données liées (transaction atomique).
+
+        Les suppressions sont explicites et ordonnées (enfants avant parents),
+        afin de fonctionner même sur d'anciennes bases dont les clés étrangères
+        n'auraient pas ON DELETE CASCADE.
+        """
+        self.conn.execute("BEGIN")
+        try:
+            ex = self.conn.execute
+            ex("DELETE FROM matrix_scores WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM prediction_updates WHERE prediction_id IN "
+               "(SELECT id FROM predictions WHERE project_id = ?)", (project_id,))
+            ex("DELETE FROM predictions WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM entity_mentions WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM relationships WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM entities WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM bifurcation_nodes WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM evidence_items WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM hypotheses WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM horizons WHERE project_id = ?", (project_id,))
+            ex("DELETE FROM projects WHERE id = ?", (project_id,))
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
     # --- Hypothèses ----------------------------------------------------------
 
     def create_hypothesis(
@@ -2227,7 +2400,8 @@ class Database:
                     continue
                 cur = self.conn.execute(
                     "INSERT INTO entities (project_id, name, type) VALUES (?, ?, ?)",
-                    (project_id, ent["name"], ent.get("type", "MISC")),
+                    (project_id, ent["name"],
+                     refine_entity_type(ent["name"], ent.get("type", "MISC"))),
                 )
                 entity_id_map[ent["name"]] = int(cur.lastrowid)
 
@@ -2242,13 +2416,16 @@ class Database:
                     project_id, rel["target"]
                 )
                 if src and tgt and src != tgt:
+                    rtype = refine_relation_type(
+                        rel["source"], rel["target"], rel.get("type", "CO_OCCURS")
+                    )
                     self.conn.execute(
                         "INSERT INTO relationships (project_id, source_entity_id, "
                         "target_entity_id, relation_type, weight) "
                         "VALUES (?, ?, ?, ?, 3.0) "
                         "ON CONFLICT(project_id, source_entity_id, target_entity_id, "
                         "relation_type) DO UPDATE SET weight = weight + 1.0",
-                        (project_id, src, tgt, rel.get("type", "CO_OCCURS")),
+                        (project_id, src, tgt, rtype),
                     )
 
             # 5. Prédictions.
@@ -2504,23 +2681,32 @@ class ReportSummaryWorker(QThread):
         self.evidence = evidence
 
     def run(self) -> None:  # noqa: D401
-        """Charge spaCy, résume chaque preuve, émet {id: résumé}."""
+        """Résume chaque preuve. Utilise spaCy si possible, sinon un repli
+        pur-Python (TextRank TF-IDF) pour que les résumés restent disponibles
+        même si spaCy est absent ou incompatible avec le modèle."""
+        summaries: dict[int, str] = {}
+        nlp = None
         try:
             import spacy
 
             nlp = spacy.load(SPACY_MODEL)
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(str(exc))
-            return
-        summaries: dict[int, str] = {}
-        texts = [t or "" for _, t in self.evidence]
-        try:
-            docs = list(nlp.pipe(texts))
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(str(exc))
-            return
-        for (evidence_id, _), doc in zip(self.evidence, docs):
-            sentences, selected = summarize_doc(doc)
+        except Exception:  # noqa: BLE001 - spaCy absent/incompatible : repli
+            nlp = None
+
+        if nlp is not None:
+            try:
+                docs = list(nlp.pipe([t or "" for _, t in self.evidence]))
+                for (evidence_id, _), doc in zip(self.evidence, docs):
+                    sentences, selected = summarize_doc(doc)
+                    summaries[evidence_id] = " ".join(sentences[i] for i in selected)
+                self.done.emit(summaries)
+                return
+            except Exception:  # noqa: BLE001 - échec en cours de traitement : repli
+                summaries = {}
+
+        # Repli pur-Python (sans spaCy).
+        for evidence_id, text in self.evidence:
+            sentences, selected = summarize_text_plain(text or "")
             summaries[evidence_id] = " ".join(sentences[i] for i in selected)
         self.done.emit(summaries)
 
@@ -6008,10 +6194,26 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
         self.project_list = QListWidget()
         self.project_list.currentItemChanged.connect(self._on_project_selected)
         self.project_list.itemDoubleClicked.connect(self._on_project_activated)
-        splitter.addWidget(self.project_list)
+        left_layout.addWidget(self.project_list)
+
+        project_buttons = QHBoxLayout()
+        btn_new_project = QPushButton("＋ Nouveau")
+        btn_new_project.clicked.connect(self.new_project)
+        self.btn_delete_project = QPushButton("🗑 Supprimer")
+        self.btn_delete_project.clicked.connect(self.delete_current_project)
+        self.btn_delete_project.setEnabled(False)
+        project_buttons.addWidget(btn_new_project)
+        project_buttons.addWidget(self.btn_delete_project)
+        left_layout.addLayout(project_buttons)
+
+        splitter.addWidget(left_panel)
 
         self.project_view = ProjectView(self.db)
         splitter.addWidget(self.project_view)
@@ -6032,6 +6234,10 @@ class MainWindow(QMainWindow):
         self.act_new.setShortcut(QKeySequence.StandardKey.New)
         self.act_new.triggered.connect(self.new_project)
         file_menu.addAction(self.act_new)
+
+        self.act_delete_project = QAction("Supprimer le projet…", self)
+        self.act_delete_project.triggered.connect(self.delete_current_project)
+        file_menu.addAction(self.act_delete_project)
 
         self.act_open = QAction("Ouvrir un document…", self)
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
@@ -6144,6 +6350,42 @@ class MainWindow(QMainWindow):
         project_id = self.db.create_project(name, description)
         self.refresh_projects(select_id=project_id)
         self.statusBar().showMessage(f"Projet « {name} » créé.", 4000)
+
+    def delete_current_project(self) -> None:
+        """Supprime le projet sélectionné après confirmation (irréversible)."""
+        item = self.project_list.currentItem()
+        pid = self._active_project_id
+        if item is None or pid is None or self.db.get_project(pid) is None:
+            QMessageBox.information(
+                self, "Suppression", "Sélectionnez d'abord un projet à supprimer."
+            )
+            return
+        name = item.text()
+        confirm = QMessageBox.warning(
+            self,
+            "Supprimer le projet",
+            f"Supprimer définitivement le projet « {name} » et TOUTES ses données "
+            "(hypothèses, preuves, matrice, prédictions, graphe, bifurcations) ?\n\n"
+            "Cette action est irréversible.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.db.delete_project(pid)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Suppression impossible", str(exc))
+            return
+        if self.settings.value("last_project_id", 0, type=int) == pid:
+            self.settings.remove("last_project_id")
+        self._active_project_id = None
+        self.project_view.clear()
+        self.refresh_projects()
+        if hasattr(self, "btn_delete_project"):
+            self.btn_delete_project.setEnabled(False)
+        self._update_status_summary()
+        self.statusBar().showMessage(f"Projet « {name} » supprimé.", 5000)
 
     def open_document(self) -> None:
         """Ouvre un autre document IRIS-Station (base SQLite) via un sélecteur."""
@@ -6640,6 +6882,8 @@ class MainWindow(QMainWindow):
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
     ) -> None:
         """Charge le projet sélectionné dans la vue à onglets."""
+        if hasattr(self, "btn_delete_project"):
+            self.btn_delete_project.setEnabled(current is not None)
         if current is None:
             self._active_project_id = None
             self.project_view.clear()
